@@ -1,6 +1,6 @@
 // Keeps a copy of the app on the device so it opens with no internet.
 // Bump VERSION whenever index.html changes so iPads pick up the new copy.
-const VERSION = 'mapper-v1';
+const VERSION = 'mapper-v2';
 const FILES = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png', './apple-touch-icon.png'];
 
 self.addEventListener('install', e => {

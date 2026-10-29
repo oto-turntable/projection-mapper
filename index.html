@@ -548,7 +548,7 @@ $('add').onclick = () => newSurface();
 $('fs').onclick = toggleFullscreen;
 $('done').onclick = () => {
   setEditing(false);
-  if (!IS_APP && !fsElement()) enterFullscreen();
+  if (!fsElement()) enterFullscreen();
 };
 $('del').onclick = () => selId !== null && remove(selId);
 $('rotL').onclick = () => { const s = byId(selId); if (s) rotateShape(s, -90); };
@@ -658,7 +658,26 @@ function toggleFullscreen() {
   if (fsElement()) (document.exitFullscreen || document.webkitExitFullscreen).call(document);
   else enterFullscreen();
 }
-if (IS_APP) $('fs').style.display = 'none';         // already fullscreen
+const FS_OK = !!(document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen)
+  && (document.fullscreenEnabled ?? document.webkitFullscreenEnabled ?? true);
+if (!FS_OK) $('fs').style.display = 'none';
+
+// On iPad, going fullscreen removes Safari's top bar, so the page grows upward
+// and everything would jump up. Move the shapes back down by that amount so
+// they stay on the same spot of the wall (and back up when leaving fullscreen).
+if (IS_TOUCH) {
+  let lastFs = !!fsElement(), lastW = innerWidth, lastH = innerHeight, timer;
+  const settle = () => { clearTimeout(timer); timer = setTimeout(() => {
+    const fs = !!fsElement(), dy = innerHeight - lastH;
+    if (fs !== lastFs && innerWidth === lastW && dy) {
+      for (const s of state.surfaces) { s.pts = s.pts.map(([x, y]) => [x, y + dy]); place(s); }
+      save();
+    }
+    lastFs = fs; lastW = innerWidth; lastH = innerHeight;
+  }, 400); };
+  addEventListener('resize', settle);
+  for (const ev of ['fullscreenchange', 'webkitfullscreenchange']) document.addEventListener(ev, settle);
+}
 function setEditing(on) {
   document.body.classList.toggle('edit', on);
   document.body.classList.toggle('live', !on);
