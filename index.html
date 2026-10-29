@@ -1,0 +1,802 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Projection Mapper</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Mapper">
+<meta name="theme-color" content="#000000">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden;
+    font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif; color: #eee; }
+  body.live { cursor: none; }
+  #stage, #handles { position: fixed; left: 0; top: 0; }
+  /* stop iPad from scrolling/zooming the page while you drag things */
+  html, body, .surface { touch-action: none; -webkit-user-select: none; user-select: none;
+    -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+
+  /* Every shape is a fixed-size box that gets warped onto 4 corner points */
+  .surface { position: absolute; left: 0; top: 0; width: 1000px; height: 750px;
+    transform-origin: 0 0; overflow: hidden; background: #000; }
+  .surface canvas, .surface video, .surface img { position: absolute; inset: 0;
+    width: 100%; height: 100%; object-fit: fill; display: none; }
+  body.edit .surface { outline: 3px dashed rgba(255,255,255,.35); outline-offset: -3px; cursor: move; }
+  body.edit .surface.sel { outline: 4px solid #ffb000; outline-offset: -4px; }
+  body.dragging .surface.drop { outline: 8px solid #34c759; outline-offset: -8px; }
+
+  /* Corner dots live outside the warp so they stay round */
+  .handle { position: absolute; width: 24px; height: 24px; margin: -12px 0 0 -12px;
+    border-radius: 50%; border: 2px solid #fff; background: rgba(255,176,0,.65);
+    cursor: grab; box-sizing: border-box; display: none; touch-action: none; }
+  .handle.sel { background: #ff3b30; }
+  /* bigger dots and knob for fingers */
+  @media (pointer: coarse) {
+    .handle { width: 40px; height: 40px; margin: -20px 0 0 -20px; border-width: 3px; }
+    #rotknob { width: 44px !important; height: 44px !important; margin: -22px 0 0 -22px !important;
+      font-size: 24px !important; line-height: 40px !important; }
+    #panel button { padding: 11px 10px; }
+  }
+  body.edit .handle { display: block; }
+
+  /* Rotate knob that sits just above the selected shape */
+  #rotknob { position: absolute; width: 30px; height: 30px; margin: -15px 0 0 -15px;
+    border-radius: 50%; background: #34c759; border: 2px solid #fff; box-sizing: border-box;
+    color: #000; font: bold 17px/26px sans-serif; text-align: center; cursor: grab;
+    display: none; touch-action: none; user-select: none; }
+  #rotline { position: absolute; height: 2px; background: #34c759; transform-origin: 0 50%;
+    display: none; pointer-events: none; }
+  body.edit.hassel #rotknob, body.edit.hassel #rotline { display: block; }
+  #rotdeg { position: absolute; left: 34px; top: 2px; font: 600 12px sans-serif; color: #fff;
+    text-shadow: 0 0 3px #000; white-space: nowrap; pointer-events: none; }
+
+  /* ---------- Control panel ---------- */
+  #panel { position: fixed; top: 12px; left: 12px; width: 290px; max-height: calc(100% - 24px);
+    overflow-y: auto; padding: 14px; box-sizing: border-box;
+    background: rgba(22,22,26,.95); border: 1px solid #333; border-radius: 14px;
+    display: none; z-index: 10; touch-action: pan-y; -webkit-overflow-scrolling: touch; }
+  body.edit #panel { display: block; }
+  #panel input[type=text] { -webkit-user-select: text; user-select: text; }
+  #panel h1 { font-size: 16px; margin: 0 0 10px; }
+  #panel h2 { font-size: 13px; margin: 16px 0 8px; color: #aaa; font-weight: 600; }
+  .row { display: flex; gap: 8px; }
+  button { font: inherit; color: #eee; background: #2c2c32; border: 1px solid #444;
+    border-radius: 8px; padding: 8px 10px; cursor: pointer; flex: 1; }
+  button:hover { background: #3a3a42; }
+  button.warn { color: #ff8a80; }
+  button#fs { background: #1e3a5f; border-color: #2f6db0; }
+  button#fs:hover { background: #26507f; }
+  button.done { background: #ffb000; color: #000; border: 0; font-weight: 700; margin-top: 14px; width: 100%; }
+  button.done:hover { background: #ffc233; }
+
+  .hint { background: #1d2b3a; border: 1px solid #2f4d6b; border-radius: 10px; padding: 10px;
+    margin-top: 12px; color: #cfe6ff; font-size: 13px; }
+
+  /* The big "add a picture or video" box */
+  #dropzone { margin-top: 4px; border: 2px dashed #5a5a66; border-radius: 12px; padding: 18px 12px;
+    text-align: center; cursor: pointer; transition: .15s; }
+  #dropzone:hover, body.dragging #dropzone { border-color: #34c759; background: rgba(52,199,89,.08); }
+  #dropzone .big { font-size: 34px; line-height: 1; }
+  #dropzone b { display: block; margin-top: 6px; font-size: 15px; }
+  #dropzone small { color: #999; }
+  #media { display: none; margin-top: 4px; border: 1px solid #444; border-radius: 12px; overflow: hidden; }
+  #media .thumb { height: 120px; background: #000; display: flex; align-items: center; justify-content: center; }
+  #media .thumb img, #media .thumb video { max-width: 100%; max-height: 100%; }
+  #media .name { padding: 6px 10px; font-size: 12px; color: #bbb; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; border-top: 1px solid #333; }
+  #media .row { padding: 0 8px 8px; }
+  .seg { display: flex; margin-top: 8px; border: 1px solid #444; border-radius: 8px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; padding: 6px 4px; font-size: 12px; background: #1b1b20; }
+  .seg button + button { border-left: 1px solid #444; }
+  .seg button.on { background: #ffb000; color: #000; font-weight: 600; }
+
+  /* Effect tiles */
+  #tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  #tiles button { padding: 8px 2px 6px; font-size: 11px; display: flex; flex-direction: column;
+    align-items: center; gap: 2px; }
+  #tiles button span { font-size: 20px; }
+  #tiles button.on { border-color: #ffb000; background: #3a3220; }
+
+  .opt { margin-top: 10px; display: none; }
+  .opt.show { display: block; }
+  .opt label { display: block; color: #aaa; font-size: 12px; margin-bottom: 4px; }
+  .opt input[type=text] { width: 100%; box-sizing: border-box; background: #111; color: #eee;
+    border: 1px solid #444; border-radius: 8px; padding: 7px; font: inherit; }
+  .opt input[type=range] { width: 100%; }
+  .opt input[type=color] { width: 60px; height: 30px; border: 0; background: none; padding: 0; }
+
+  .keys { margin-top: 12px; color: #777; font-size: 11px; }
+  kbd { background: #333; border-radius: 3px; padding: 0 4px; color: #ddd; }
+  .tip-touch { display: none; color: #cfe6ff; }
+  @media (pointer: coarse) { .tip-touch { display: inline; } }
+
+  /* Overlay while dragging a file over the window */
+  #dropmsg { position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%);
+    background: #34c759; color: #000; font-weight: 700; padding: 12px 20px; border-radius: 30px;
+    display: none; z-index: 20; pointer-events: none; font-size: 16px; }
+  body.dragging #dropmsg { display: block; }
+
+  #toast { position: fixed; left: 50%; top: 20px; transform: translateX(-50%);
+    background: rgba(30,30,30,.9); color: #fff; padding: 10px 18px; border-radius: 20px;
+    z-index: 30; pointer-events: none; opacity: 0; transition: opacity .3s; }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body class="edit">
+<div id="stage"></div>
+<div id="handles"></div>
+<div id="dropmsg"></div>
+<div id="toast"></div>
+<input type="file" id="file" accept="image/*,video/*" hidden>
+
+<div id="panel">
+  <h1>🎬 Projection Mapper</h1>
+  <div class="row">
+    <button id="add">➕ Add shape</button>
+    <button id="fs">⛶ Fullscreen</button>
+  </div>
+
+  <div id="nosel" class="hint">👆 Click a shape to choose what goes on it.<br>
+    Drag its 4 dots onto the corners of your real object first.</div>
+
+  <div id="selbox">
+    <h2 id="seltitle">SHAPE #1</h2>
+
+    <!-- Step 1: picture or video -->
+    <div id="dropzone">
+      <div class="big">🖼️</div>
+      <b>Add a picture or video</b>
+      <small>Click here, or drag a file onto the shape</small>
+    </div>
+    <div id="media">
+      <div class="thumb" id="thumb"></div>
+      <div class="name" id="mname"></div>
+      <div class="seg" id="fit" style="margin: 0 8px 8px">
+        <button data-fit="fill" title="Stretch to the 4 corners exactly">Stretch</button>
+        <button data-fit="cover" title="Fill the shape, trim the edges">Fill</button>
+        <button data-fit="contain" title="Show the whole thing, black bars">Whole</button>
+      </div>
+      <div class="row">
+        <button id="replace">🔄 Change</button>
+        <button id="unmedia" class="warn">✖ Remove</button>
+      </div>
+    </div>
+
+    <!-- Step 2 (optional): built-in effects -->
+    <h2>…OR USE A BUILT-IN EFFECT</h2>
+    <div id="tiles">
+      <button data-t="grid"><span>▦</span>Grid</button>
+      <button data-t="solid"><span>🟦</span>Color</button>
+      <button data-t="black"><span>⬛</span>Blackout</button>
+      <button data-t="rainbow"><span>🌈</span>Rainbow</button>
+      <button data-t="pulse"><span>💓</span>Pulse</button>
+      <button data-t="chase"><span>✨</span>Outline</button>
+      <button data-t="stripes"><span>🚧</span>Stripes</button>
+      <button data-t="ripples"><span>🎯</span>Ripples</button>
+      <button data-t="plasma"><span>🫧</span>Plasma</button>
+      <button data-t="text"><span>🔤</span>Text</button>
+      <button data-t="webcam"><span>📷</span>Webcam</button>
+    </div>
+    <div class="opt" id="o-text"><label>Words</label><input type="text" id="text"></div>
+    <div class="opt" id="o-color"><label>Color</label><input type="color" id="color"></div>
+    <div class="opt" id="o-speed"><label>Speed</label><input type="range" id="speed" min="0" max="3" step="0.05"></div>
+
+    <h2>TURN</h2>
+    <div class="row">
+      <button id="rotL" title="Turn the whole shape 90° left">↺ 90°</button>
+      <button id="rotR" title="Turn the whole shape 90° right">↻ 90°</button>
+      <button id="spinPic" title="Keep the outline, turn what's inside it">🔄 Turn picture</button>
+    </div>
+    <div class="opt show" style="margin-top:6px"><label>Or drag the green ↻ knob above the shape (hold Shift to snap)</label></div>
+
+    <div class="row" style="margin-top:14px">
+      <button id="dup">📄 Copy shape</button>
+      <button id="del" class="warn">🗑 Delete shape</button>
+    </div>
+  </div>
+
+  <button class="done" id="done">✅ Done — go fullscreen</button>
+
+  <div class="keys">
+    <span class="tip-touch">Double-tap the projection to bring these controls back.<br></span>
+    <kbd>E</kbd> show/hide these controls · <kbd>F</kbd> fullscreen<br>
+    Click a dot, then arrow keys nudge it (<kbd>Shift</kbd> = 10px)<br>
+    <kbd>[</kbd> <kbd>]</kbd> rotate 1° (<kbd>Shift</kbd> = 15°)<br>
+    Everything saves automatically. &nbsp;
+    <a href="#" id="reset" style="color:#ff8a80">Start over</a>
+  </div>
+</div>
+
+<script>
+// ---------- Setup ----------
+const BW = 1000, BH = 750;           // size of every shape before warping
+const SAVE_KEY = 'projection-mapper-v1';
+const stage = document.getElementById('stage');
+const handleLayer = document.getElementById('handles');
+const $ = id => document.getElementById(id);
+
+let state = loadState();
+
+// Shapes are stored as positions on the *screen*, not in the page, so they
+// stay on the same spot of the wall whether Chrome's top bar is showing or
+// the page is fullscreen. offX/offY = where the page's top-left sits on screen.
+let offX = 0, offY = 0;
+const IS_TOUCH = navigator.maxTouchPoints > 1;     // iPad / iPhone
+const IS_APP = matchMedia('(display-mode: fullscreen), (display-mode: standalone)').matches
+  || navigator.standalone;                          // opened from the Home Screen icon
+function measureOffset() {
+  if (IS_TOUCH) return;                             // one screen, nothing to line up with
+  const x = screenX, y = screenY + (outerHeight - innerHeight);
+  if (x === offX && y === offY) return;
+  offX = x; offY = y;
+  stage.style.transform = handleLayer.style.transform = `translate(${-offX}px, ${-offY}px)`;
+}
+measureOffset();
+addEventListener('resize', measureOffset);
+for (const ev of ['fullscreenchange', 'webkitfullscreenchange'])
+  document.addEventListener(ev, () => {
+    measureOffset();
+    $('fs').textContent = fsElement() ? '↩ Exit fullscreen' : '⛶ Fullscreen';
+  });
+setInterval(measureOffset, 500);   // catches the window being dragged to another screen
+if (!state.screenCoords) {         // older saves used page positions — convert once
+  state.surfaces.forEach(s => s.pts = s.pts.map(([x, y]) => [x + offX, y + offY]));
+  state.screenCoords = true; save();
+}
+let selId = null;        // which shape is selected
+let selCorner = null;    // which corner (0-3) is selected for arrow-key nudging
+const views = {};        // id -> DOM bits for that shape
+const rotLine = document.createElement('div'); rotLine.id = 'rotline';
+const rotKnob = document.createElement('div'); rotKnob.id = 'rotknob';
+rotKnob.innerHTML = '↻<span id="rotdeg"></span>';
+handleLayer.append(rotLine, rotKnob);
+const urls = {};         // id -> object URL of the picture/video on that shape
+
+const COLOR_FX = ['grid', 'solid', 'pulse', 'chase', 'stripes', 'ripples', 'text'];
+const SPEED_FX = ['rainbow', 'pulse', 'chase', 'stripes', 'ripples', 'plasma', 'text'];
+
+function loadState() {
+  try { return JSON.parse(localStorage.getItem(SAVE_KEY)) || { nextId: 1, surfaces: [] }; }
+  catch { return { nextId: 1, surfaces: [] }; }
+}
+function save() {
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify(state)); } catch {}
+}
+const byId = id => state.surfaces.find(s => s.id === id);
+
+let toastTimer;
+function toast(msg) {
+  $('toast').textContent = msg; $('toast').classList.add('show');
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').classList.remove('show'), 2500);
+}
+
+// ---------- Saved pictures/videos (kept in the browser's IndexedDB) ----------
+const dbReady = new Promise(res => {
+  try {
+    const r = indexedDB.open('projection-mapper', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('files');
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => res(null);
+  } catch { res(null); }
+});
+async function fileStore(mode, fn) {
+  const db = await dbReady; if (!db) return null;
+  return new Promise(res => {
+    try {
+      const tx = db.transaction('files', mode), req = fn(tx.objectStore('files'));
+      tx.oncomplete = () => res(req.result ?? null);
+      tx.onerror = () => res(null);
+    } catch { res(null); }
+  });
+}
+const putFile = (id, blob) => fileStore('readwrite', s => s.put(blob, id));
+const getFile = id => fileStore('readonly', s => s.get(id));
+const delFile = id => fileStore('readwrite', s => s.delete(id));
+
+// ---------- The warp math ----------
+// Finds the "homography": the transform that sends the 4 corners of the flat
+// shape onto the 4 points you dragged. CSS can apply it as matrix3d.
+function warpCSS(pts) {
+  const src = [[0, 0], [BW, 0], [BW, BH], [0, BH]];
+  const A = [], b = [];
+  for (let i = 0; i < 4; i++) {
+    const [x, y] = src[i], [X, Y] = pts[i];
+    A.push([x, y, 1, 0, 0, 0, -x * X, -y * X]); b.push(X);
+    A.push([0, 0, 0, x, y, 1, -x * Y, -y * Y]); b.push(Y);
+  }
+  const h = solve(A, b);
+  if (!h) return 'none';
+  const [a, bb, c, d, e, f, g, k] = h;
+  return `matrix3d(${a},${d},0,${g},${bb},${e},0,${k},0,0,1,0,${c},${f},0,1)`;
+}
+function solve(A, b) {   // plain Gaussian elimination
+  const n = b.length, M = A.map((r, i) => [...r, b[i]]);
+  for (let col = 0; col < n; col++) {
+    let p = col;
+    for (let r = col + 1; r < n; r++) if (Math.abs(M[r][col]) > Math.abs(M[p][col])) p = r;
+    if (Math.abs(M[p][col]) < 1e-10) return null;
+    [M[col], M[p]] = [M[p], M[col]];
+    for (let r = 0; r < n; r++) {
+      if (r === col) continue;
+      const f = M[r][col] / M[col][col];
+      for (let c = col; c <= n; c++) M[r][c] -= f * M[col][c];
+    }
+  }
+  return M.map((r, i) => r[n] / r[i]);
+}
+
+// ---------- Building shapes on screen ----------
+function newSurface(atX, atY) {
+  const n = state.surfaces.length;
+  const cx = atX ?? offX + innerWidth / 2 + (n % 5) * 30 - 60;
+  const cy = atY ?? offY + innerHeight / 2 + (n % 5) * 30 - 60;
+  const s = {
+    id: state.nextId++, type: 'grid', color: '#00c8ff', speed: 1, text: 'HELLO', fit: 'fill',
+    pts: [[cx - 160, cy - 120], [cx + 160, cy - 120], [cx + 160, cy + 120], [cx - 160, cy + 120]],
+  };
+  state.surfaces.push(s);
+  build(s); select(s.id); save();
+  return s;
+}
+
+function build(s) {
+  const root = document.createElement('div');
+  root.className = 'surface';
+  root.dataset.id = s.id;
+  const canvas = document.createElement('canvas');
+  canvas.width = BW; canvas.height = BH;
+  const video = document.createElement('video');
+  video.muted = true; video.loop = true; video.playsInline = true; video.autoplay = true;
+  const img = document.createElement('img');
+  root.append(canvas, video, img);
+  stage.appendChild(root);
+
+  const handles = [0, 1, 2, 3].map(i => {
+    const h = document.createElement('div');
+    h.className = 'handle';
+    handleLayer.appendChild(h);
+    dragHandle(h, s.id, i);
+    return h;
+  });
+
+  dragBody(root, s.id);
+  views[s.id] = { root, canvas, ctx: canvas.getContext('2d'), video, img, handles, plasma: null };
+  place(s); showContent(s);
+}
+
+function place(s) {
+  const v = views[s.id];
+  v.root.style.transform = warpCSS(s.pts);
+  s.pts.forEach(([x, y], i) => { v.handles[i].style.left = x + 'px'; v.handles[i].style.top = y + 'px'; });
+  if (s.id === selId) placeKnob(s);
+}
+
+// ---------- Rotating ----------
+const centerOf = s => [s.pts.reduce((a, p) => a + p[0], 0) / 4, s.pts.reduce((a, p) => a + p[1], 0) / 4];
+function rotatePts(pts, ang, [cx, cy]) {
+  const c = Math.cos(ang), n = Math.sin(ang);
+  return pts.map(([x, y]) => [cx + (x - cx) * c - (y - cy) * n, cy + (x - cx) * n + (y - cy) * c]);
+}
+function rotateShape(s, deg) {
+  s.pts = rotatePts(s.pts, deg * Math.PI / 180, centerOf(s)); place(s); save();
+}
+// The knob sits 45px out from the middle of the shape's top edge
+function placeKnob(s) {
+  const [cx, cy] = centerOf(s);
+  const mx = (s.pts[0][0] + s.pts[1][0]) / 2, my = (s.pts[0][1] + s.pts[1][1]) / 2;
+  let dx = mx - cx, dy = my - cy; const len = Math.hypot(dx, dy) || 1; dx /= len; dy /= len;
+  rotKnob.style.left = mx + dx * 45 + 'px'; rotKnob.style.top = my + dy * 45 + 'px';
+  rotLine.style.left = mx + 'px'; rotLine.style.top = my + 'px'; rotLine.style.width = '45px';
+  rotLine.style.transform = `rotate(${Math.atan2(dy, dx)}rad)`;
+}
+rotKnob.addEventListener('pointerdown', e => {
+  e.stopPropagation(); e.preventDefault();
+  const s = byId(selId); if (!s) return;
+  rotKnob.setPointerCapture(e.pointerId);
+  const c = centerOf(s), start = s.pts.map(p => [...p]);
+  const angAt = ev => Math.atan2(ev.clientY + offY - c[1], ev.clientX + offX - c[0]);
+  const a0 = angAt(e);
+  const move = ev => {
+    let deg = (angAt(ev) - a0) * 180 / Math.PI;
+    deg = ((deg + 540) % 360) - 180;                 // keep it between -180 and 180
+    if (ev.shiftKey) deg = Math.round(deg / 15) * 15;
+    s.pts = rotatePts(start, deg * Math.PI / 180, c); place(s);
+    $('rotdeg').textContent = `${deg > 0 ? '+' : ''}${Math.round(deg)}°`;
+  };
+  const up = () => { rotKnob.removeEventListener('pointermove', move); $('rotdeg').textContent = ''; save(); };
+  rotKnob.addEventListener('pointermove', move);
+  rotKnob.addEventListener('pointerup', up, { once: true });
+});
+
+function remove(id) {
+  const v = views[id];
+  v.root.remove(); v.handles.forEach(h => h.remove());
+  stopWebcam(id); dropMedia(id); delFile(id);
+  delete views[id];
+  state.surfaces = state.surfaces.filter(s => s.id !== id);
+  select(null); save();
+}
+
+// Decide which element (effect canvas / video / picture) shows on this shape
+function showContent(s) {
+  const v = views[s.id];
+  const isMedia = s.type === 'file' && urls[s.id];
+  const showVideo = (isMedia && s.fileKind === 'video') || s.type === 'webcam';
+  const showImg = isMedia && s.fileKind === 'image';
+  v.canvas.style.display = showVideo || showImg ? 'none' : 'block';
+  v.video.style.display = showVideo ? 'block' : 'none';
+  v.img.style.display = showImg ? 'block' : 'none';
+  v.video.style.objectFit = v.img.style.objectFit = s.type === 'webcam' ? 'cover' : s.fit;
+  if (s.type !== 'webcam') stopWebcam(s.id);
+}
+
+function stopWebcam(id) {
+  const v = views[id];
+  if (v?.video.srcObject) { v.video.srcObject.getTracks().forEach(t => t.stop()); v.video.srcObject = null; }
+}
+function dropMedia(id) {
+  const v = views[id];
+  if (urls[id]) { URL.revokeObjectURL(urls[id]); delete urls[id]; }
+  if (v) { v.video.removeAttribute('src'); v.video.load(); v.img.removeAttribute('src'); }
+}
+
+// Put a picture or video onto a shape (and remember it for next time)
+function loadMedia(s, blob, name, remember = true) {
+  stopWebcam(s.id); dropMedia(s.id);
+  const kind = blob.type.startsWith('video') ? 'video' : 'image';
+  urls[s.id] = URL.createObjectURL(blob);
+  const v = views[s.id];
+  if (kind === 'video') { v.video.src = urls[s.id]; v.video.play().catch(() => {}); }
+  else v.img.src = urls[s.id];
+  Object.assign(s, { type: 'file', fileKind: kind, fileName: name || s.fileName || 'file' });
+  showContent(s); save();
+  if (remember) putFile(s.id, blob);
+  if (s.id === selId) refreshPanel();
+}
+
+function setEffect(s, t) {
+  if (s.type === 'file') { dropMedia(s.id); delFile(s.id); delete s.fileName; delete s.fileKind; }
+  s.type = t; showContent(s); save(); refreshPanel();
+}
+
+// ---------- Dragging dots and shapes ----------
+function dragHandle(h, id, i) {
+  h.addEventListener('pointerdown', e => {
+    e.stopPropagation(); e.preventDefault();
+    select(id); selCorner = i; refreshHandles();
+    h.setPointerCapture(e.pointerId);
+    const s = byId(id), ox = s.pts[i][0] - e.clientX, oy = s.pts[i][1] - e.clientY;
+    const move = ev => { s.pts[i] = [ev.clientX + ox, ev.clientY + oy]; place(s); };
+    const up = () => { h.removeEventListener('pointermove', move); save(); };
+    h.addEventListener('pointermove', move);
+    h.addEventListener('pointerup', up, { once: true });
+  });
+}
+function dragBody(root, id) {
+  root.addEventListener('pointerdown', e => {
+    if (!document.body.classList.contains('edit')) return;
+    e.preventDefault();
+    select(id); selCorner = null; refreshHandles();
+    root.setPointerCapture(e.pointerId);
+    const s = byId(id), start = s.pts.map(p => [...p]), sx = e.clientX, sy = e.clientY;
+    const move = ev => {
+      const dx = ev.clientX - sx, dy = ev.clientY - sy;
+      s.pts = start.map(([x, y]) => [x + dx, y + dy]); place(s);
+    };
+    const up = () => { root.removeEventListener('pointermove', move); save(); };
+    root.addEventListener('pointermove', move);
+    root.addEventListener('pointerup', up, { once: true });
+  });
+}
+// Clicking empty black space deselects
+stage.parentElement.addEventListener('pointerdown', e => {
+  if (e.target === document.body || e.target === stage) select(null);
+});
+
+// ---------- Selection + panel ----------
+function select(id) {
+  selId = id;
+  if (id === null) selCorner = null;
+  for (const k in views) views[k].root.classList.toggle('sel', +k === id);
+  if (id !== null) {   // put the selected shape and its dots on top
+    stage.appendChild(views[id].root);
+    views[id].handles.forEach(h => handleLayer.appendChild(h));
+  }
+  document.body.classList.toggle('hassel', id !== null);
+  if (id !== null) { handleLayer.append(rotLine, rotKnob); placeKnob(byId(id)); }
+  refreshHandles(); refreshPanel();
+}
+function refreshHandles() {
+  for (const k in views) views[k].handles.forEach((h, i) =>
+    h.classList.toggle('sel', +k === selId && i === selCorner));
+}
+function refreshPanel() {
+  const s = byId(selId);
+  $('nosel').style.display = s ? 'none' : 'block';
+  $('selbox').style.display = s ? 'block' : 'none';
+  if (!s) return;
+  $('seltitle').textContent = `SHAPE #${s.id}`;
+
+  const hasMedia = s.type === 'file' && urls[s.id];
+  $('dropzone').style.display = hasMedia ? 'none' : 'block';
+  $('media').style.display = hasMedia ? 'block' : 'none';
+  if (hasMedia) {
+    const thumb = $('thumb');
+    if (thumb.dataset.url !== urls[s.id]) {
+      thumb.innerHTML = s.fileKind === 'video'
+        ? `<video src="${urls[s.id]}" muted autoplay loop playsinline></video>`
+        : `<img src="${urls[s.id]}">`;
+      thumb.dataset.url = urls[s.id];
+    }
+    $('mname').textContent = (s.fileKind === 'video' ? '🎞 ' : '🖼 ') + s.fileName;
+    document.querySelectorAll('#fit button').forEach(b => b.classList.toggle('on', b.dataset.fit === s.fit));
+  }
+
+  document.querySelectorAll('#tiles button').forEach(b => b.classList.toggle('on', b.dataset.t === s.type));
+  $('o-text').classList.toggle('show', s.type === 'text');
+  $('o-color').classList.toggle('show', COLOR_FX.includes(s.type));
+  $('o-speed').classList.toggle('show', SPEED_FX.includes(s.type));
+  $('text').value = s.text; $('color').value = s.color; $('speed').value = s.speed;
+}
+
+$('add').onclick = () => newSurface();
+$('fs').onclick = toggleFullscreen;
+$('done').onclick = () => {
+  setEditing(false);
+  if (!IS_APP && !fsElement()) enterFullscreen();
+};
+$('del').onclick = () => selId !== null && remove(selId);
+$('rotL').onclick = () => { const s = byId(selId); if (s) rotateShape(s, -90); };
+$('rotR').onclick = () => { const s = byId(selId); if (s) rotateShape(s, 90); };
+// Same outline, but the picture's corners move one step clockwise
+$('spinPic').onclick = () => {
+  const s = byId(selId); if (!s) return;
+  s.pts = [s.pts[1], s.pts[2], s.pts[3], s.pts[0]]; place(s); save();
+};
+$('dup').onclick = async () => {
+  const s = byId(selId); if (!s) return;
+  const c = { ...JSON.parse(JSON.stringify(s)), id: state.nextId++ };
+  c.pts = c.pts.map(([x, y]) => [x + 30, y + 30]);
+  if (c.type === 'webcam') c.type = 'grid';
+  if (c.type === 'file') c.type = 'grid';      // switched back once the file is copied
+  state.surfaces.push(c); build(c); select(c.id); save();
+  if (s.type === 'file') { const blob = await getFile(s.id); if (blob) loadMedia(c, blob, s.fileName); }
+};
+$('reset').onclick = e => {
+  e.preventDefault();
+  if (!confirm('Delete every shape and start over?')) return;
+  [...state.surfaces].forEach(s => remove(s.id));
+  state.nextId = 1; save();
+};
+
+// Picture/video picking
+$('dropzone').onclick = $('replace').onclick = () => $('file').click();
+$('file').onchange = e => {
+  const f = e.target.files[0]; e.target.value = '';
+  const s = byId(selId);
+  if (s && f) loadMedia(s, f, f.name);
+};
+$('unmedia').onclick = () => { const s = byId(selId); if (s) setEffect(s, 'grid'); };
+document.querySelectorAll('#fit button').forEach(b => b.onclick = () => {
+  const s = byId(selId); if (!s) return;
+  s.fit = b.dataset.fit; showContent(s); save(); refreshPanel();
+});
+
+// Effect tiles
+document.querySelectorAll('#tiles button').forEach(b => b.onclick = async () => {
+  const s = byId(selId); if (!s) return;
+  const t = b.dataset.t;
+  if (t === 'webcam') {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      setEffect(s, 'webcam');
+      views[s.id].video.srcObject = stream;
+    } catch (err) { toast('Webcam blocked or not available'); }
+    return;
+  }
+  setEffect(s, t);
+});
+$('color').oninput = e => { const s = byId(selId); if (s) { s.color = e.target.value; save(); } };
+$('speed').oninput = e => { const s = byId(selId); if (s) { s.speed = +e.target.value; save(); } };
+$('text').oninput = e => { const s = byId(selId); if (s) { s.text = e.target.value; save(); } };
+
+// ---------- Drag a file from Finder onto a shape ----------
+function shapeAt(x, y) {
+  const el = document.elementsFromPoint(x, y).find(e => e.classList?.contains('surface'));
+  return el ? +el.dataset.id : null;
+}
+let lastDrop = null;
+addEventListener('dragover', e => {
+  if (![...e.dataTransfer.types].includes('Files')) return;
+  e.preventDefault();
+  document.body.classList.add('dragging');
+  const overPanel = $('panel').contains(e.target);
+  const id = overPanel ? selId : shapeAt(e.clientX, e.clientY);
+  if (id !== lastDrop) {
+    for (const k in views) views[k].root.classList.toggle('drop', +k === id);
+    lastDrop = id;
+  }
+  $('dropmsg').textContent = id ? `Drop to put it on shape #${id}` : 'Drop to make a new shape here';
+});
+function endDrag() {
+  document.body.classList.remove('dragging');
+  for (const k in views) views[k].root.classList.remove('drop');
+  lastDrop = null;
+}
+addEventListener('dragleave', e => { if (!e.relatedTarget) endDrag(); });
+addEventListener('drop', e => {
+  e.preventDefault();
+  const id = lastDrop; endDrag();
+  const f = [...e.dataTransfer.files].find(f => /^(image|video)\//.test(f.type));
+  if (!f) { toast('That file isn’t a picture or video'); return; }
+  if (!document.body.classList.contains('edit')) setEditing(true);
+  const s = id ? byId(id) : newSurface(e.clientX + offX, e.clientY + offY);
+  select(s.id); loadMedia(s, f, f.name);
+});
+
+// ---------- Double-tap to show the controls again ----------
+let lastTap = 0;
+addEventListener('pointerup', e => {
+  if (document.body.classList.contains('edit')) return;
+  const now = performance.now();
+  if (now - lastTap < 350) { setEditing(true); lastTap = 0; } else lastTap = now;
+});
+
+// ---------- Keyboard ----------
+const fsElement = () => document.fullscreenElement || document.webkitFullscreenElement;
+function enterFullscreen() {
+  const el = document.documentElement;
+  const go = el.requestFullscreen || el.webkitRequestFullscreen;
+  if (go) try { const p = go.call(el); if (p?.catch) p.catch(() => {}); } catch {}
+}
+function toggleFullscreen() {
+  if (fsElement()) (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+  else enterFullscreen();
+}
+if (IS_APP) $('fs').style.display = 'none';         // already fullscreen
+function setEditing(on) {
+  document.body.classList.toggle('edit', on);
+  document.body.classList.toggle('live', !on);
+  if (!on) toast(IS_TOUCH ? 'Double-tap anywhere to bring the controls back'
+                         : 'Press E for the controls · Esc leaves fullscreen');
+}
+addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' && e.target.type === 'text') return;
+  const k = e.key.toLowerCase();
+  if (k === 'e' || (e.key === 'Escape' && !document.fullscreenElement && !document.body.classList.contains('edit')))
+    setEditing(!document.body.classList.contains('edit'));
+  else if (k === 'f') toggleFullscreen();
+  else if (k === 'n') newSurface();
+  else if (e.key === 'Tab') {
+    e.preventDefault();
+    const ids = state.surfaces.map(s => s.id); if (!ids.length) return;
+    select(ids[(ids.indexOf(selId) + 1) % ids.length]);
+  } else if ((e.key === 'Delete' || e.key === 'Backspace') && selId !== null) remove(selId);
+  else if ((e.code === 'BracketLeft' || e.code === 'BracketRight') && selId !== null) {
+    const step = e.shiftKey ? 15 : 1;
+    rotateShape(byId(selId), e.code === 'BracketLeft' ? -step : step);
+  }
+  else if (e.key.startsWith('Arrow') && selId !== null) {
+    e.preventDefault();
+    const s = byId(selId), step = e.shiftKey ? 10 : 1;
+    const dx = { ArrowLeft: -step, ArrowRight: step }[e.key] || 0;
+    const dy = { ArrowUp: -step, ArrowDown: step }[e.key] || 0;
+    // with a dot picked, nudge that dot; otherwise nudge the whole shape
+    (selCorner === null ? s.pts : [s.pts[selCorner]]).forEach(p => { p[0] += dx; p[1] += dy; });
+    place(s); save();
+  }
+});
+
+// ---------- Effects (what gets drawn on each shape) ----------
+const effects = {
+  grid(c, s, t) {
+    c.fillStyle = '#000'; c.fillRect(0, 0, BW, BH);
+    c.strokeStyle = '#fff'; c.lineWidth = 3;
+    for (let x = 0; x <= BW; x += BW / 10) { c.beginPath(); c.moveTo(x, 0); c.lineTo(x, BH); c.stroke(); }
+    for (let y = 0; y <= BH; y += BH / 10) { c.beginPath(); c.moveTo(0, y); c.lineTo(BW, y); c.stroke(); }
+    c.strokeStyle = s.color; c.lineWidth = 16; c.strokeRect(8, 8, BW - 16, BH - 16);
+    c.beginPath(); c.moveTo(0, 0); c.lineTo(BW, BH); c.moveTo(BW, 0); c.lineTo(0, BH); c.stroke();
+    c.fillStyle = '#fff'; c.font = 'bold 160px sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle';
+    c.fillText(s.id, BW / 2, BH / 2);
+  },
+  solid(c, s) { c.fillStyle = s.color; c.fillRect(0, 0, BW, BH); },
+  black(c) { c.fillStyle = '#000'; c.fillRect(0, 0, BW, BH); },
+  rainbow(c, s, t) { c.fillStyle = `hsl(${(t * 40) % 360},100%,50%)`; c.fillRect(0, 0, BW, BH); },
+  pulse(c, s, t) {
+    c.fillStyle = '#000'; c.fillRect(0, 0, BW, BH);
+    c.globalAlpha = (Math.sin(t * 3) + 1) / 2; c.fillStyle = s.color; c.fillRect(0, 0, BW, BH);
+    c.globalAlpha = 1;
+  },
+  chase(c, s, t) {
+    // a glowing light runs around the edge — great on boxes and window frames
+    c.fillStyle = '#000'; c.fillRect(0, 0, BW, BH);
+    const per = 2 * (BW + BH), w = 40;
+    c.lineWidth = w; c.strokeStyle = s.color; c.globalAlpha = 0.15; c.strokeRect(w / 2, w / 2, BW - w, BH - w);
+    c.globalAlpha = 1; c.setLineDash([per * 0.25, per * 0.75]); c.lineDashOffset = -(t * 600) % per;
+    c.shadowColor = s.color; c.shadowBlur = 40;
+    c.strokeRect(w / 2, w / 2, BW - w, BH - w);
+    c.setLineDash([]); c.shadowBlur = 0;
+  },
+  stripes(c, s, t) {
+    c.fillStyle = '#000'; c.fillRect(0, 0, BW, BH);
+    c.save(); c.translate(BW / 2, BH / 2); c.rotate(-Math.PI / 4);
+    const gap = 140, off = (t * 150) % gap;
+    c.fillStyle = s.color;
+    for (let x = -1400 - off; x < 1400; x += gap) c.fillRect(x, -1400, gap / 2, 2800);
+    c.restore();
+  },
+  ripples(c, s, t) {
+    c.fillStyle = '#000'; c.fillRect(0, 0, BW, BH);
+    c.strokeStyle = s.color; c.lineWidth = 18;
+    const gap = 110, off = (t * 120) % gap;
+    for (let r = off; r < 800; r += gap) {
+      c.globalAlpha = 1 - r / 800; c.beginPath(); c.arc(BW / 2, BH / 2, r, 0, 7); c.stroke();
+    }
+    c.globalAlpha = 1;
+  },
+  plasma(c, s, t, v) {
+    // drawn small, then stretched up smoothly — cheap and looks great
+    const W = 100, H = 75;
+    if (!v.plasma) { v.plasma = new OffscreenCanvas(W, H); v.pctx = v.plasma.getContext('2d'); v.pimg = v.pctx.createImageData(W, H); }
+    const d = v.pimg.data;
+    for (let y = 0, i = 0; y < H; y++) for (let x = 0; x < W; x++, i += 4) {
+      const val = Math.sin(x / 9 + t) + Math.sin(y / 7 - t * 1.3) + Math.sin((x + y) / 12 + t * 0.7)
+        + Math.sin(Math.hypot(x - W / 2, y - H / 2) / 6 - t * 2);
+      d[i] = 128 + 127 * Math.sin(val * Math.PI);
+      d[i + 1] = 128 + 127 * Math.sin(val * Math.PI + 2.1);
+      d[i + 2] = 128 + 127 * Math.sin(val * Math.PI + 4.2);
+      d[i + 3] = 255;
+    }
+    v.pctx.putImageData(v.pimg, 0, 0);
+    c.imageSmoothingEnabled = true; c.drawImage(v.plasma, 0, 0, BW, BH);
+  },
+  text(c, s, t) {
+    c.fillStyle = '#000'; c.fillRect(0, 0, BW, BH);
+    c.fillStyle = s.color; c.textAlign = 'center'; c.textBaseline = 'middle';
+    let size = 400; c.font = `bold ${size}px sans-serif`;
+    const w = c.measureText(s.text || ' ').width;
+    if (w > BW * 0.9) { size *= BW * 0.9 / w; c.font = `bold ${size}px sans-serif`; }
+    c.shadowColor = s.color; c.shadowBlur = 20 + 20 * Math.sin(t * 2);
+    c.fillText(s.text, BW / 2, BH / 2); c.shadowBlur = 0;
+  },
+};
+
+// Each shape keeps its own clock so the speed slider changes smoothly
+const clocks = {};
+let last = performance.now();
+function frame(now) {
+  const dt = (now - last) / 1000; last = now;
+  for (const s of state.surfaces) {
+    const v = views[s.id], fx = effects[s.type];
+    clocks[s.id] = (clocks[s.id] || 0) + dt * s.speed;
+    if (fx && v.canvas.style.display !== 'none') fx(v.ctx, s, clocks[s.id], v);
+  }
+  requestAnimationFrame(frame);
+}
+
+// ---------- Start ----------
+for (const s of state.surfaces) {
+  s.fit ??= 'fill';
+  if (s.type === 'webcam') s.type = 'grid';
+  build(s);
+  // bring back the saved picture/video; fall back to the grid if it's gone
+  if (s.type === 'file') getFile(s.id).then(blob => {
+    if (blob) loadMedia(s, blob, s.fileName, false);
+    else { s.type = 'grid'; showContent(s); save(); if (s.id === selId) refreshPanel(); }
+  });
+}
+if (!state.surfaces.length) newSurface();
+else select(state.surfaces[0].id);
+requestAnimationFrame(frame);
+
+if ('serviceWorker' in navigator && location.protocol === 'https:')
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+// Ask the browser not to clear saved pictures when space runs low
+navigator.storage?.persist?.().catch(() => {});
+</script>
+</body>
+</html>
