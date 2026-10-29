@@ -227,7 +227,8 @@ let state = loadState();
 let offX = 0, offY = 0;
 const IS_TOUCH = navigator.maxTouchPoints > 1;     // iPad / iPhone
 const IS_APP = matchMedia('(display-mode: fullscreen), (display-mode: standalone)').matches
-  || navigator.standalone;                          // opened from the Home Screen icon
+  || navigator.standalone                           // opened from the Home Screen icon
+  || window.__nativeApp;                            // running inside the iPad app
 function measureOffset() {
   if (IS_TOUCH) return;                             // one screen, nothing to line up with
   const x = screenX, y = screenY + (outerHeight - innerHeight);
